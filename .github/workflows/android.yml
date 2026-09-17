@@ -23,7 +23,7 @@ jobs:
         with:
           gradle-version: '8.9'
       - name: Install Android SDK
-        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+        run: $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - name: Build installable test APK
         run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
@@ -40,7 +40,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" LumaStack-preview.apk SHA256SUMS.txt \
-            --prerelease \
-            --title "LumaStack preview ${GITHUB_REF_NAME}" \
-            --notes "Early test APK for Android 10+. Download LumaStack-preview.apk and allow installation from your browser or Files app. This is a debug-signed preview and has not been device-tested; future release-signed builds may require uninstalling this preview first. Photos are processed on-device."
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" LumaStack-preview.apk SHA256SUMS.txt --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" LumaStack-preview.apk SHA256SUMS.txt \
+              --prerelease \
+              --title "LumaStack preview ${GITHUB_REF_NAME}" \
+              --notes "Early test APK for Android 10+. Download LumaStack-preview.apk and allow installation from your browser or Files app. This is a debug-signed preview and has not been device-tested; future release-signed builds may require uninstalling this preview first. Photos are processed on-device."
+          fi
