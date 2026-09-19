@@ -43,6 +43,7 @@ import android.widget.LinearLayout;
 import android.widget.NumberPicker;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 
 import androidx.core.content.FileProvider;
@@ -54,6 +55,7 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -75,8 +77,12 @@ public final class MainActivity extends Activity {
     private ImageView resultPreview;
     private TextureView cameraPreview;
     private View shutterFlash;
+    private FrameLayout rootView, cameraCard;
+    private LinearLayout controlsCard, appearanceCard;
+    private Switch glassSwitch;
     private int targetCount;
     private boolean capturing;
+    private boolean glassEnabled;
 
     private HandlerThread cameraThread;
     private Handler cameraHandler;
@@ -93,6 +99,7 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         getWindow().setStatusBarColor(NAVY);
         getWindow().setNavigationBarColor(NAVY);
+        glassEnabled = getSharedPreferences("appearance", MODE_PRIVATE).getBoolean("liquid_glass", true);
         buildUi();
         showIntro();
     }
@@ -110,15 +117,14 @@ public final class MainActivity extends Activity {
     }
 
     private void buildUi() {
-        FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(NAVY);
+        rootView = new FrameLayout(this);
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
         page.setPadding(dp(20), dp(22), dp(20), dp(32));
         scroll.addView(page);
-        root.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+        rootView.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
 
         LinearLayout brandRow = new LinearLayout(this);
         brandRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -131,8 +137,7 @@ public final class MainActivity extends Activity {
         subtitle.setPadding(0, dp(4), 0, dp(18));
         page.addView(subtitle);
 
-        FrameLayout cameraCard = new FrameLayout(this);
-        cameraCard.setBackground(roundRect(PANEL, 24));
+        cameraCard = new FrameLayout(this);
         cameraCard.setClipToOutline(true);
         cameraPreview = new TextureView(this);
         cameraPreview.setSurfaceTextureListener(surfaceListener);
@@ -151,13 +156,12 @@ public final class MainActivity extends Activity {
         cameraCard.addView(guide, guideParams);
         page.addView(cameraCard, new LinearLayout.LayoutParams(-1, dp(410)));
 
-        LinearLayout settings = new LinearLayout(this);
-        settings.setOrientation(LinearLayout.VERTICAL);
-        settings.setPadding(dp(18), dp(16), dp(18), dp(18));
-        settings.setBackground(roundRect(PANEL, 22));
+        controlsCard = new LinearLayout(this);
+        controlsCard.setOrientation(LinearLayout.VERTICAL);
+        controlsCard.setPadding(dp(18), dp(16), dp(18), dp(18));
         LinearLayout.LayoutParams settingsParams = new LinearLayout.LayoutParams(-1, -2);
         settingsParams.topMargin = dp(14);
-        page.addView(settings, settingsParams);
+        page.addView(controlsCard, settingsParams);
         LinearLayout countRow = new LinearLayout(this);
         countRow.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout countText = new LinearLayout(this);
@@ -174,27 +178,52 @@ public final class MainActivity extends Activity {
         countPicker.setWrapSelectorWheel(false);
         countPicker.setOnValueChangedListener((picker, oldValue, newValue) -> refreshButtons());
         countRow.addView(countPicker, new LinearLayout.LayoutParams(dp(88), dp(110)));
-        settings.addView(countRow);
+        controlsCard.addView(countRow);
         captureButton = premiumButton("Capture stack automatically", CYAN, Color.rgb(4, 27, 38), this::startSeries);
-        settings.addView(captureButton);
-        importButton = premiumButton("Import an existing bracket", Color.rgb(45, 63, 82), INK, this::choosePhotos);
-        settings.addView(importButton);
+        controlsCard.addView(captureButton);
+        importButton = premiumButton("Choose photos from Gallery", Color.rgb(45, 63, 82), INK, this::choosePhotos);
+        controlsCard.addView(importButton);
         stackButton = premiumButton("Fuse, grade and save", Color.rgb(145, 98, 255), Color.WHITE, this::stack);
-        settings.addView(stackButton);
+        controlsCard.addView(stackButton);
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setMax(100);
         progress.setVisibility(View.GONE);
         LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(-1, dp(6));
         progressParams.topMargin = dp(18);
-        settings.addView(progress, progressParams);
+        controlsCard.addView(progress, progressParams);
         status = label("Camera preview stays inside LumaStack. Tap capture and hold steady.", 14, MUTED);
         status.setPadding(0, dp(15), 0, 0);
-        settings.addView(status);
+        controlsCard.addView(status);
+
+        appearanceCard = new LinearLayout(this);
+        appearanceCard.setOrientation(LinearLayout.VERTICAL);
+        appearanceCard.setPadding(dp(18), dp(16), dp(18), dp(16));
+        LinearLayout.LayoutParams appearanceParams = new LinearLayout.LayoutParams(-1, -2);
+        appearanceParams.topMargin = dp(14);
+        page.addView(appearanceCard, appearanceParams);
+        LinearLayout appearanceRow = new LinearLayout(this);
+        appearanceRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout appearanceText = new LinearLayout(this);
+        appearanceText.setOrientation(LinearLayout.VERTICAL);
+        TextView appearanceTitle = label("Liquid Glass", 17, INK);
+        appearanceTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        appearanceText.addView(appearanceTitle);
+        appearanceText.addView(label("Frosted layers, light edges and fluid depth", 12, MUTED));
+        appearanceRow.addView(appearanceText, new LinearLayout.LayoutParams(0, -2, 1));
+        glassSwitch = new Switch(this);
+        glassSwitch.setChecked(glassEnabled);
+        glassSwitch.setContentDescription("Turn Liquid Glass appearance on or off");
+        glassSwitch.setOnCheckedChangeListener((button, checked) -> {
+            glassEnabled = checked;
+            getSharedPreferences("appearance", MODE_PRIVATE).edit().putBoolean("liquid_glass", checked).apply();
+            applyAppearance();
+        });
+        appearanceRow.addView(glassSwitch);
+        appearanceCard.addView(appearanceRow);
 
         resultPreview = new ImageView(this);
         resultPreview.setAdjustViewBounds(true);
         resultPreview.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        resultPreview.setBackground(roundRect(PANEL, 22));
         resultPreview.setVisibility(View.GONE);
         LinearLayout.LayoutParams resultParams = new LinearLayout.LayoutParams(-1, dp(320));
         resultParams.topMargin = dp(14);
@@ -204,7 +233,8 @@ public final class MainActivity extends Activity {
         privacy.setLetterSpacing(0.08f);
         privacy.setPadding(0, dp(22), 0, 0);
         page.addView(privacy);
-        setContentView(root);
+        setContentView(rootView);
+        applyAppearance();
         refreshButtons();
     }
 
@@ -406,34 +436,56 @@ public final class MainActivity extends Activity {
     }
 
     private void choosePhotos() {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.setType("image/*");
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        targetCount = countPicker.getValue();
+        status.setText("Choose up to " + targetCount + " photos. Selecting 2 or more makes a stack ready.");
+        Intent intent;
+        if (Build.VERSION.SDK_INT >= 33) {
+            intent = new Intent(MediaStore.ACTION_PICK_IMAGES);
+            intent.setType("image/*");
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            intent.putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX,
+                    Math.min(targetCount, MediaStore.getPickImagesMaxLimit()));
+        } else {
+            intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.setType("image/*");
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        }
         startActivityForResult(intent, PICK_PHOTOS);
     }
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         if (request != PICK_PHOTOS || result != RESULT_OK || data == null) return;
-        photos.clear();
+        LinkedHashSet<Uri> selected = new LinkedHashSet<>();
         if (data.getClipData() != null) {
             int count = Math.min(12, data.getClipData().getItemCount());
-            for (int i = 0; i < count; i++) photos.add(data.getClipData().getItemAt(i).getUri());
-        } else if (data.getData() != null) photos.add(data.getData());
+            for (int i = 0; i < count; i++) selected.add(data.getClipData().getItemAt(i).getUri());
+        } else if (data.getData() != null) selected.add(data.getData());
+        ArrayList<Uri> streams = data.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+        if (streams != null) selected.addAll(streams);
+        photos.clear();
+        for (Uri uri : selected) {
+            if (photos.size() == 12) break;
+            photos.add(uri);
+        }
         for (Uri uri : photos) try {
-            getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        } catch (SecurityException ignored) { }
+            if ((data.getFlags() & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0)
+                getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } catch (Exception ignored) { }
+        if (photos.size() >= 2) countPicker.setValue(photos.size());
         targetCount = countPicker.getValue();
         frameCounter.setText("IMPORTED  " + photos.size() + " / " + targetCount);
-        status.setText(photos.size() == targetCount ? "Imported bracket ready to fuse."
-                : "Selected " + photos.size() + " photos; choose exactly " + targetCount + ".");
+        status.setText(photos.size() >= 2 ? "Gallery stack ready with " + photos.size() + " photos."
+                : "Choose at least two photos to create a stack.");
         refreshButtons();
     }
 
     private void refreshButtons() {
         captureButton.setEnabled(!capturing && cameraSession != null);
         importButton.setEnabled(!capturing);
+        importButton.setText("Choose up to " + countPicker.getValue() + " photos from Gallery");
         stackButton.setEnabled(!capturing && photos.size() == countPicker.getValue());
         countPicker.setEnabled(!capturing);
     }
@@ -549,7 +601,8 @@ public final class MainActivity extends Activity {
         Button button = new Button(this);
         button.setText(text); button.setTextColor(foreground); button.setTextSize(15);
         button.setTypeface(Typeface.DEFAULT, Typeface.BOLD); button.setAllCaps(false);
-        button.setBackground(roundRect(background, 18)); button.setOnClickListener(v -> action.run());
+        button.setTag(background);
+        button.setBackground(buttonSurface(background)); button.setOnClickListener(v -> action.run());
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(58));
         params.topMargin = dp(10); button.setLayoutParams(params);
         return button;
@@ -559,6 +612,50 @@ public final class MainActivity extends Activity {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(color); drawable.setCornerRadius(dp(radiusDp));
         return drawable;
+    }
+
+    private GradientDrawable glassSurface(int radiusDp) {
+        GradientDrawable drawable = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{Color.argb(220, 32, 54, 72), Color.argb(145, 20, 43, 61), Color.argb(195, 12, 25, 39)});
+        drawable.setCornerRadius(dp(radiusDp));
+        drawable.setStroke(dp(1), Color.argb(105, 210, 242, 255));
+        return drawable;
+    }
+
+    private GradientDrawable buttonSurface(int solidColor) {
+        if (!glassEnabled) return roundRect(solidColor, 18);
+        int light = Color.argb(238, Math.min(255, Color.red(solidColor) + 24),
+                Math.min(255, Color.green(solidColor) + 24), Math.min(255, Color.blue(solidColor) + 24));
+        GradientDrawable drawable = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{light, solidColor});
+        drawable.setCornerRadius(dp(18));
+        drawable.setStroke(dp(1), Color.argb(90, 255, 255, 255));
+        return drawable;
+    }
+
+    private void applyAppearance() {
+        if (rootView == null) return;
+        if (glassEnabled) {
+            GradientDrawable backdrop = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                    new int[]{Color.rgb(5, 13, 25), Color.rgb(11, 35, 50), Color.rgb(14, 18, 38)});
+            rootView.setBackground(backdrop);
+            cameraCard.setBackground(glassSurface(24));
+            controlsCard.setBackground(glassSurface(22));
+            appearanceCard.setBackground(glassSurface(22));
+            resultPreview.setBackground(glassSurface(22));
+        } else {
+            rootView.setBackgroundColor(NAVY);
+            cameraCard.setBackground(roundRect(PANEL, 24));
+            controlsCard.setBackground(roundRect(PANEL, 22));
+            appearanceCard.setBackground(roundRect(PANEL, 22));
+            resultPreview.setBackground(roundRect(PANEL, 22));
+        }
+        Button[] buttons = {captureButton, importButton, stackButton};
+        for (Button button : buttons) {
+            Object color = button.getTag();
+            if (color instanceof Integer) button.setBackground(buttonSurface((Integer) color));
+        }
     }
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
