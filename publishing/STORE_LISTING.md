@@ -6,7 +6,7 @@
 
 **Full description:**
 
-Turn a series of photos into one finished image with LumaStack. Choose how many shots to use, take them with your camera, or select photos you already have. LumaStack aligns the frames, blends exposure detail, adds a gentle color grade, and saves the result to your Pictures folder.
+Turn a series of photos into one finished image with LumaStack. Choose the stack depth, then let the built-in camera automatically capture an exposure bracket without leaving the app. You can also select several Gallery photos at once. LumaStack aligns the frames, blends exposure detail, adds a gentle color grade, and saves the result to your Pictures folder. An optional Liquid Glass appearance adds frosted layers and luminous controls.
 
 Everything runs on your device. No account, upload, subscription, or internet connection is needed.
 
