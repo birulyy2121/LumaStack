@@ -1,6 +1,6 @@
 # LumaStack
 
-An offline Android photo stacker. The user selects 2–12 photos, LumaStack automatically captures an exposure bracket inside its own camera screen (or imports existing shots), then aligns, blends, grades, and saves a JPEG to **Pictures/LumaStack**.
+An offline Android photo stacker. The user selects 2–12 photos, LumaStack automatically captures an exposure bracket inside its own camera screen (or imports existing shots), then aligns, blends, grades, and saves a JPEG to **Pictures/LumaStack**. Its optional Liquid Glass appearance can be turned on or off inside the app.
 
 ## Open and run
 
@@ -9,7 +9,7 @@ An offline Android photo stacker. The user selects 2–12 photos, LumaStack auto
 3. Run `legacyDebug` on Android 6–9 or `modernDebug` on Android 10+. Grant camera access for automatic capture. Android 6–9 also asks for storage access when saving the final JPEG.
 4. For the best result, use a static scene and different exposure levels. Handheld movement is supported within the alignment range; moving subjects can ghost.
 
-The app makes no API calls and has no network permission. It uses Camera2 for its built-in automatic bracket and the Android document picker for optional imports.
+The app makes no API calls and has no network permission. It uses Camera2 for its built-in automatic bracket, Android's modern multi-photo picker on Android 13+, and a compatible document picker on older phones. Gallery imports automatically match the stack depth to the number of selected photos.
 
 ## Processing
 
