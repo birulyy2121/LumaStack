@@ -3,12 +3,14 @@ package com.lumastack.app;
 import android.Manifest;
 import android.app.Activity;
 import android.content.ContentValues;
+import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.ImageFormat;
+import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -17,7 +19,9 @@ import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
+import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.Image;
 import android.media.ImageReader;
@@ -31,6 +35,7 @@ import android.provider.MediaStore;
 import android.util.Range;
 import android.util.Size;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
@@ -38,7 +43,6 @@ import android.view.ViewGroup;
 import android.view.animation.AccelerateDecelerateInterpolator;
 import android.widget.Button;
 import android.widget.FrameLayout;
-import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.NumberPicker;
 import android.widget.ProgressBar;
@@ -71,18 +75,21 @@ public final class MainActivity extends Activity {
     private final List<Uri> photos = new ArrayList<>();
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private NumberPicker countPicker;
-    private TextView status, frameCounter;
-    private Button captureButton, importButton, stackButton;
+    private TextView status, frameCounter, resultStats;
+    private Button captureButton, importButton, stackButton, compareButton, shareButton;
     private ProgressBar progress;
-    private ImageView resultPreview;
+    private ZoomImageView resultPreview;
     private TextureView cameraPreview;
-    private View shutterFlash;
+    private View shutterFlash, focusRing;
     private FrameLayout rootView, cameraCard;
-    private LinearLayout controlsCard, appearanceCard;
+    private LinearLayout controlsCard, appearanceCard, resultActions;
     private Switch glassSwitch;
     private int targetCount;
     private boolean capturing;
     private boolean glassEnabled;
+    private boolean showingReference;
+    private Bitmap finalBitmap, referenceBitmap;
+    private Uri savedResultUri;
 
     private HandlerThread cameraThread;
     private Handler cameraHandler;
@@ -93,6 +100,8 @@ public final class MainActivity extends Activity {
     private String cameraId;
     private Size captureSize;
     private int sensorOrientation;
+    private Rect sensorArray;
+    private int maxAfRegions, maxAeRegions;
     private Range<Integer> exposureRange = new Range<>(0, 0);
 
     @Override public void onCreate(Bundle state) {
@@ -141,11 +150,24 @@ public final class MainActivity extends Activity {
         cameraCard.setClipToOutline(true);
         cameraPreview = new TextureView(this);
         cameraPreview.setSurfaceTextureListener(surfaceListener);
+        cameraPreview.setOnTouchListener((view, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_UP && !capturing)
+                focusAt(event.getX(), event.getY());
+            return true;
+        });
         cameraCard.addView(cameraPreview, new FrameLayout.LayoutParams(-1, -1));
         shutterFlash = new View(this);
         shutterFlash.setBackgroundColor(Color.WHITE);
         shutterFlash.setAlpha(0f);
         cameraCard.addView(shutterFlash, new FrameLayout.LayoutParams(-1, -1));
+        focusRing = new View(this);
+        GradientDrawable focusDrawable = new GradientDrawable();
+        focusDrawable.setShape(GradientDrawable.OVAL);
+        focusDrawable.setColor(Color.TRANSPARENT);
+        focusDrawable.setStroke(dp(2), CYAN);
+        focusRing.setBackground(focusDrawable);
+        focusRing.setAlpha(0f);
+        cameraCard.addView(focusRing, new FrameLayout.LayoutParams(dp(64), dp(64)));
         frameCounter = pill("CAMERA STARTING", Color.WHITE, Color.argb(145, 4, 10, 18));
         FrameLayout.LayoutParams counterParams = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
         counterParams.setMargins(dp(14), dp(14), 0, 0);
@@ -179,6 +201,13 @@ public final class MainActivity extends Activity {
         countPicker.setOnValueChangedListener((picker, oldValue, newValue) -> refreshButtons());
         countRow.addView(countPicker, new LinearLayout.LayoutParams(dp(88), dp(110)));
         controlsCard.addView(countRow);
+        LinearLayout presetRow = new LinearLayout(this);
+        presetRow.setGravity(Gravity.CENTER);
+        presetRow.addView(presetButton("3x", 3));
+        presetRow.addView(presetButton("5x", 5));
+        presetRow.addView(presetButton("8x", 8));
+        presetRow.addView(presetButton("12x", 12));
+        controlsCard.addView(presetRow);
         captureButton = premiumButton("Capture stack automatically", CYAN, Color.rgb(4, 27, 38), this::startSeries);
         controlsCard.addView(captureButton);
         importButton = premiumButton("Choose photos from Gallery", Color.rgb(45, 63, 82), INK, this::choosePhotos);
@@ -221,13 +250,24 @@ public final class MainActivity extends Activity {
         appearanceRow.addView(glassSwitch);
         appearanceCard.addView(appearanceRow);
 
-        resultPreview = new ImageView(this);
-        resultPreview.setAdjustViewBounds(true);
-        resultPreview.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        resultPreview = new ZoomImageView(this);
+        resultPreview.setContentDescription("Finished stacked image. Pinch to zoom and drag to inspect.");
         resultPreview.setVisibility(View.GONE);
         LinearLayout.LayoutParams resultParams = new LinearLayout.LayoutParams(-1, dp(320));
         resultParams.topMargin = dp(14);
         page.addView(resultPreview, resultParams);
+        resultActions = new LinearLayout(this);
+        resultActions.setGravity(Gravity.CENTER);
+        compareButton = compactButton("View original", Color.rgb(45, 63, 82), INK, this::toggleComparison);
+        shareButton = compactButton("Share result", Color.rgb(30, 115, 132), Color.WHITE, this::shareResult);
+        resultActions.addView(compareButton);
+        resultActions.addView(shareButton);
+        resultActions.setVisibility(View.GONE);
+        page.addView(resultActions);
+        resultStats = label("", 12, MUTED);
+        resultStats.setPadding(dp(6), dp(12), dp(6), 0);
+        resultStats.setVisibility(View.GONE);
+        page.addView(resultStats);
         TextView privacy = label("PRIVATE BY DESIGN  •  NO ACCOUNT  •  NO CLOUD  •  NO API", 11, MUTED);
         privacy.setGravity(Gravity.CENTER);
         privacy.setLetterSpacing(0.08f);
@@ -306,6 +346,11 @@ public final class MainActivity extends Activity {
                     cameraId = id;
                     Integer orientation = c.get(CameraCharacteristics.SENSOR_ORIENTATION);
                     sensorOrientation = orientation == null ? 90 : orientation;
+                    sensorArray = c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+                    Integer afRegions = c.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF);
+                    Integer aeRegions = c.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE);
+                    maxAfRegions = afRegions == null ? 0 : afRegions;
+                    maxAeRegions = aeRegions == null ? 0 : aeRegions;
                     Range<Integer> range = c.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
                     if (range != null) exposureRange = range;
                     StreamConfigurationMap map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
@@ -369,6 +414,40 @@ public final class MainActivity extends Activity {
         } catch (CameraAccessException e) { showCameraError(e); }
     }
 
+    private void focusAt(float previewX, float previewY) {
+        if (cameraSession == null || previewRequest == null || sensorArray == null
+                || cameraPreview.getWidth() == 0 || cameraPreview.getHeight() == 0) return;
+        int sensorX = sensorArray.left + Math.round(previewX / cameraPreview.getWidth() * sensorArray.width());
+        int sensorY = sensorArray.top + Math.round(previewY / cameraPreview.getHeight() * sensorArray.height());
+        int half = Math.max(40, Math.min(sensorArray.width(), sensorArray.height()) / 14);
+        Rect area = new Rect(
+                Math.max(sensorArray.left, sensorX - half), Math.max(sensorArray.top, sensorY - half),
+                Math.min(sensorArray.right, sensorX + half), Math.min(sensorArray.bottom, sensorY + half));
+        MeteringRectangle metering = new MeteringRectangle(area, MeteringRectangle.METERING_WEIGHT_MAX);
+        try {
+            if (maxAfRegions > 0) previewRequest.set(CaptureRequest.CONTROL_AF_REGIONS,
+                    new MeteringRectangle[]{metering});
+            if (maxAeRegions > 0) previewRequest.set(CaptureRequest.CONTROL_AE_REGIONS,
+                    new MeteringRectangle[]{metering});
+            previewRequest.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO);
+            previewRequest.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START);
+            cameraSession.capture(previewRequest.build(), null, cameraHandler);
+            frameCounter.setText("FOCUSING");
+            focusRing.setX(previewX - dp(32)); focusRing.setY(previewY - dp(32));
+            focusRing.setScaleX(.65f); focusRing.setScaleY(.65f); focusRing.setAlpha(1f);
+            focusRing.animate().scaleX(1f).scaleY(1f).alpha(.15f).setDuration(700).start();
+            cameraHandler.postDelayed(() -> {
+                try {
+                    previewRequest.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_IDLE);
+                    previewRequest.set(CaptureRequest.CONTROL_AF_MODE,
+                            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+                    cameraSession.setRepeatingRequest(previewRequest.build(), null, cameraHandler);
+                    runOnUiThread(() -> frameCounter.setText("LIVE • READY"));
+                } catch (Exception ignored) { }
+            }, 650);
+        } catch (CameraAccessException e) { showCameraError(e); }
+    }
+
     private void startSeries() {
         if (cameraSession == null || imageReader == null) {
             status.setText("Camera is still starting. Try again in a moment.");
@@ -377,7 +456,7 @@ public final class MainActivity extends Activity {
         photos.clear();
         targetCount = countPicker.getValue();
         capturing = true;
-        resultPreview.setVisibility(View.GONE);
+        hideResultInspection();
         status.setText("Auto-capturing an exposure bracket. Hold steady…");
         refreshButtons();
         captureNext();
@@ -501,22 +580,34 @@ public final class MainActivity extends Activity {
             return;
         }
         List<Uri> selection = new ArrayList<>(photos);
+        hideResultInspection();
+        recycleDisplayedResults();
         captureButton.setEnabled(false); importButton.setEnabled(false); stackButton.setEnabled(false);
         progress.setVisibility(View.VISIBLE); progress.setProgress(0);
         frameCounter.setText("FUSING FRAMES");
         status.setText("Aligning detail, balancing exposure and grading color…");
         worker.execute(() -> {
-            Bitmap result = null;
+            StackProcessor.Result processed = null;
             try {
-                result = StackProcessor.process(this, selection, (done, total) -> runOnUiThread(() -> {
+                processed = StackProcessor.process(this, selection, (done, total) -> runOnUiThread(() -> {
                     progress.setProgress(Math.round(done * 90f / total));
                     status.setText("Blending frame " + done + " of " + total + "…");
                 }));
-                Uri saved = save(result);
-                Bitmap display = result;
+                Uri saved = save(processed.bitmap);
+                StackProcessor.Result display = processed;
                 runOnUiThread(() -> {
-                    resultPreview.setImageBitmap(display);
+                    recycleDisplayedResults();
+                    finalBitmap = display.bitmap;
+                    referenceBitmap = display.reference;
+                    savedResultUri = saved;
+                    showingReference = false;
+                    resultPreview.setImageBitmap(finalBitmap);
+                    resultPreview.resetToFit();
                     resultPreview.setVisibility(View.VISIBLE);
+                    resultActions.setVisibility(View.VISIBLE);
+                    resultStats.setText(formatStats(display, selection.size()));
+                    resultStats.setVisibility(View.VISIBLE);
+                    compareButton.setText("View original");
                     resultPreview.setAlpha(0f);
                     resultPreview.setTranslationY(dp(18));
                     resultPreview.animate().alpha(1f).translationY(0).setDuration(650).start();
@@ -526,13 +617,60 @@ public final class MainActivity extends Activity {
                     refreshButtons();
                 });
             } catch (Exception e) {
-                if (result != null) result.recycle();
+                if (processed != null) {
+                    processed.bitmap.recycle();
+                    processed.reference.recycle();
+                }
                 runOnUiThread(() -> {
                     progress.setVisibility(View.GONE); frameCounter.setText("TRY AGAIN");
                     status.setText("Could not stack: " + e.getMessage()); refreshButtons();
                 });
             }
         });
+    }
+
+    private void toggleComparison() {
+        if (finalBitmap == null || referenceBitmap == null) return;
+        showingReference = !showingReference;
+        resultPreview.setImageBitmap(showingReference ? referenceBitmap : finalBitmap);
+        resultPreview.resetToFit();
+        compareButton.setText(showingReference ? "View fused result" : "View original");
+        frameCounter.setText(showingReference ? "REFERENCE FRAME" : "FUSED MASTER");
+    }
+
+    private void shareResult() {
+        if (savedResultUri == null) return;
+        Intent share = new Intent(Intent.ACTION_SEND);
+        share.setType("image/jpeg");
+        share.putExtra(Intent.EXTRA_STREAM, savedResultUri);
+        share.setClipData(ClipData.newRawUri("LumaStack result", savedResultUri));
+        share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivity(Intent.createChooser(share, "Share LumaStack result"));
+    }
+
+    private String formatStats(StackProcessor.Result result, int frameCount) {
+        int maxX = 0, maxY = 0;
+        for (int[] offset : result.offsets) {
+            maxX = Math.max(maxX, Math.abs(offset[0]));
+            maxY = Math.max(maxY, Math.abs(offset[1]));
+        }
+        return "COMPUTATIONAL INSPECTOR\n" + frameCount + " frames  •  Reference #"
+                + (result.referenceIndex + 1) + "  •  Max alignment " + maxX + "×" + maxY
+                + " px\n" + String.format(java.util.Locale.US, "Processed in %.1fs  •  Pictures/LumaStack",
+                result.processingMillis / 1000f);
+    }
+
+    private void hideResultInspection() {
+        if (resultPreview != null) resultPreview.setVisibility(View.GONE);
+        if (resultActions != null) resultActions.setVisibility(View.GONE);
+        if (resultStats != null) resultStats.setVisibility(View.GONE);
+    }
+
+    private void recycleDisplayedResults() {
+        if (resultPreview != null) resultPreview.setImageDrawable(null);
+        if (finalBitmap != null && !finalBitmap.isRecycled()) finalBitmap.recycle();
+        if (referenceBitmap != null && !referenceBitmap.isRecycled()) referenceBitmap.recycle();
+        finalBitmap = null; referenceBitmap = null; savedResultUri = null;
     }
 
     private Uri save(Bitmap bitmap) throws IOException {
@@ -608,6 +746,21 @@ public final class MainActivity extends Activity {
         return button;
     }
 
+    private Button compactButton(String text, int background, int foreground, Runnable action) {
+        Button button = new Button(this);
+        button.setText(text); button.setTextColor(foreground); button.setTextSize(13);
+        button.setTypeface(Typeface.DEFAULT, Typeface.BOLD); button.setAllCaps(false);
+        button.setTag(background); button.setBackground(buttonSurface(background));
+        button.setOnClickListener(v -> action.run());
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(48), 1f);
+        params.setMargins(dp(4), dp(10), dp(4), 0); button.setLayoutParams(params);
+        return button;
+    }
+
+    private Button presetButton(String text, int count) {
+        return compactButton(text, Color.rgb(27, 47, 66), INK, () -> countPicker.setValue(count));
+    }
+
     private GradientDrawable roundRect(int color, int radiusDp) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(color); drawable.setCornerRadius(dp(radiusDp));
@@ -651,14 +804,25 @@ public final class MainActivity extends Activity {
             appearanceCard.setBackground(roundRect(PANEL, 22));
             resultPreview.setBackground(roundRect(PANEL, 22));
         }
-        Button[] buttons = {captureButton, importButton, stackButton};
-        for (Button button : buttons) {
-            Object color = button.getTag();
-            if (color instanceof Integer) button.setBackground(buttonSurface((Integer) color));
+        restyleButtons(controlsCard);
+        restyleButtons(resultActions);
+    }
+
+    private void restyleButtons(ViewGroup group) {
+        if (group == null) return;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+            if (child instanceof Button && child.getTag() instanceof Integer)
+                child.setBackground(buttonSurface((Integer) child.getTag()));
+            else if (child instanceof ViewGroup) restyleButtons((ViewGroup) child);
         }
     }
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 
-    @Override protected void onDestroy() { super.onDestroy(); worker.shutdown(); }
+    @Override protected void onDestroy() {
+        recycleDisplayedResults();
+        super.onDestroy();
+        worker.shutdown();
+    }
 }
