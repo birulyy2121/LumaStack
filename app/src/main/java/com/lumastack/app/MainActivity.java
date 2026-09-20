@@ -13,6 +13,7 @@ import android.graphics.ImageFormat;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -82,6 +83,7 @@ public final class MainActivity extends Activity {
     private TextureView cameraPreview;
     private View shutterFlash, focusRing;
     private FrameLayout rootView, cameraCard;
+    private LiquidBackdropView liquidBackdrop;
     private LinearLayout controlsCard, appearanceCard, resultActions;
     private Switch glassSwitch;
     private int targetCount;
@@ -127,8 +129,11 @@ public final class MainActivity extends Activity {
 
     private void buildUi() {
         rootView = new FrameLayout(this);
+        liquidBackdrop = new LiquidBackdropView(this);
+        rootView.addView(liquidBackdrop, new FrameLayout.LayoutParams(-1, -1));
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
+        scroll.setBackgroundColor(Color.TRANSPARENT);
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
         page.setPadding(dp(20), dp(22), dp(20), dp(32));
@@ -237,7 +242,7 @@ public final class MainActivity extends Activity {
         TextView appearanceTitle = label("Liquid Glass", 17, INK);
         appearanceTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         appearanceText.addView(appearanceTitle);
-        appearanceText.addView(label("Frosted layers, light edges and fluid depth", 12, MUTED));
+        appearanceText.addView(label("Refraction, adaptive tint and touch-responsive light", 12, MUTED));
         appearanceRow.addView(appearanceText, new LinearLayout.LayoutParams(0, -2, 1));
         glassSwitch = new Switch(this);
         glassSwitch.setChecked(glassEnabled);
@@ -280,10 +285,15 @@ public final class MainActivity extends Activity {
 
     private void showIntro() {
         FrameLayout overlay = new FrameLayout(this);
-        overlay.setBackgroundColor(NAVY);
+        LiquidBackdropView introBackdrop = new LiquidBackdropView(this);
+        introBackdrop.setGlassEnabled(glassEnabled);
+        overlay.addView(introBackdrop, new FrameLayout.LayoutParams(-1, -1));
         LinearLayout lockup = new LinearLayout(this);
         lockup.setOrientation(LinearLayout.VERTICAL);
         lockup.setGravity(Gravity.CENTER);
+        lockup.setPadding(dp(28), dp(38), dp(28), dp(34));
+        lockup.setBackground(glassEnabled ? glassSurface(30) : roundRect(PANEL, 30));
+        lockup.setElevation(glassEnabled ? dp(14) : 0f);
         TextView title = label("LumaStack", 46, INK);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         title.setGravity(Gravity.CENTER);
@@ -297,7 +307,9 @@ public final class MainActivity extends Activity {
         lockup.addView(title);
         lockup.addView(line);
         lockup.addView(credit);
-        overlay.addView(lockup, new FrameLayout.LayoutParams(-1, -1));
+        FrameLayout.LayoutParams lockupParams = new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER);
+        lockupParams.setMargins(dp(22), 0, dp(22), 0);
+        overlay.addView(lockup, lockupParams);
         ((ViewGroup) findViewById(android.R.id.content)).addView(overlay);
         title.setAlpha(0f); title.setScaleX(0.86f); title.setScaleY(0.86f); title.setTranslationY(dp(18));
         line.setAlpha(0f); line.setTranslationY(dp(12));
@@ -741,6 +753,7 @@ public final class MainActivity extends Activity {
         button.setTypeface(Typeface.DEFAULT, Typeface.BOLD); button.setAllCaps(false);
         button.setTag(background);
         button.setBackground(buttonSurface(background)); button.setOnClickListener(v -> action.run());
+        installGlassInteraction(button);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(58));
         params.topMargin = dp(10); button.setLayoutParams(params);
         return button;
@@ -752,6 +765,7 @@ public final class MainActivity extends Activity {
         button.setTypeface(Typeface.DEFAULT, Typeface.BOLD); button.setAllCaps(false);
         button.setTag(background); button.setBackground(buttonSurface(background));
         button.setOnClickListener(v -> action.run());
+        installGlassInteraction(button);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(48), 1f);
         params.setMargins(dp(4), dp(10), dp(4), 0); button.setLayoutParams(params);
         return button;
@@ -767,42 +781,62 @@ public final class MainActivity extends Activity {
         return drawable;
     }
 
-    private GradientDrawable glassSurface(int radiusDp) {
-        GradientDrawable drawable = new GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                new int[]{Color.argb(220, 32, 54, 72), Color.argb(145, 20, 43, 61), Color.argb(195, 12, 25, 39)});
-        drawable.setCornerRadius(dp(radiusDp));
-        drawable.setStroke(dp(1), Color.argb(105, 210, 242, 255));
-        return drawable;
+    private Drawable glassSurface(int radiusDp) {
+        return new LiquidGlassDrawable(getResources().getDisplayMetrics().density,
+                radiusDp, Color.rgb(31, 55, 76), true);
     }
 
-    private GradientDrawable buttonSurface(int solidColor) {
+    private Drawable buttonSurface(int solidColor) {
         if (!glassEnabled) return roundRect(solidColor, 18);
-        int light = Color.argb(238, Math.min(255, Color.red(solidColor) + 24),
-                Math.min(255, Color.green(solidColor) + 24), Math.min(255, Color.blue(solidColor) + 24));
-        GradientDrawable drawable = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{light, solidColor});
-        drawable.setCornerRadius(dp(18));
-        drawable.setStroke(dp(1), Color.argb(90, 255, 255, 255));
-        return drawable;
+        return new LiquidGlassDrawable(getResources().getDisplayMetrics().density,
+                18, solidColor, false);
+    }
+
+    private void installGlassInteraction(Button button) {
+        button.setOnTouchListener((view, event) -> {
+            Drawable background = view.getBackground();
+            LiquidGlassDrawable glass = background instanceof LiquidGlassDrawable
+                    ? (LiquidGlassDrawable) background : null;
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    if (glass != null) glass.setTouchLight(event.getX(), event.getY(), 1f);
+                    view.animate().scaleX(.975f).scaleY(.975f).setDuration(90).start();
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    if (glass != null) glass.setTouchLight(event.getX(), event.getY(), 0f);
+                    view.animate().scaleX(1f).scaleY(1f).setDuration(220)
+                            .setInterpolator(new AccelerateDecelerateInterpolator()).start();
+                    break;
+                default:
+                    if (glass != null) glass.setTouchLight(event.getX(), event.getY(), .72f);
+            }
+            return false;
+        });
     }
 
     private void applyAppearance() {
         if (rootView == null) return;
+        liquidBackdrop.setGlassEnabled(glassEnabled);
+        rootView.setBackgroundColor(Color.TRANSPARENT);
         if (glassEnabled) {
-            GradientDrawable backdrop = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                    new int[]{Color.rgb(5, 13, 25), Color.rgb(11, 35, 50), Color.rgb(14, 18, 38)});
-            rootView.setBackground(backdrop);
             cameraCard.setBackground(glassSurface(24));
             controlsCard.setBackground(glassSurface(22));
             appearanceCard.setBackground(glassSurface(22));
             resultPreview.setBackground(glassSurface(22));
+            cameraCard.setElevation(dp(12));
+            controlsCard.setElevation(dp(10));
+            appearanceCard.setElevation(dp(10));
+            resultPreview.setElevation(dp(10));
         } else {
-            rootView.setBackgroundColor(NAVY);
             cameraCard.setBackground(roundRect(PANEL, 24));
             controlsCard.setBackground(roundRect(PANEL, 22));
             appearanceCard.setBackground(roundRect(PANEL, 22));
             resultPreview.setBackground(roundRect(PANEL, 22));
+            cameraCard.setElevation(0f);
+            controlsCard.setElevation(0f);
+            appearanceCard.setElevation(0f);
+            resultPreview.setElevation(0f);
         }
         restyleButtons(controlsCard);
         restyleButtons(resultActions);
@@ -812,9 +846,10 @@ public final class MainActivity extends Activity {
         if (group == null) return;
         for (int i = 0; i < group.getChildCount(); i++) {
             View child = group.getChildAt(i);
-            if (child instanceof Button && child.getTag() instanceof Integer)
+            if (child instanceof Button && child.getTag() instanceof Integer) {
                 child.setBackground(buttonSurface((Integer) child.getTag()));
-            else if (child instanceof ViewGroup) restyleButtons((ViewGroup) child);
+                installGlassInteraction((Button) child);
+            } else if (child instanceof ViewGroup) restyleButtons((ViewGroup) child);
         }
     }
 
